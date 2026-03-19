@@ -3,6 +3,8 @@ import numpy as np
 import os
 import json
 import hashlib
+import io
+import base64
 from PIL import Image, ImageOps
 import folder_paths
 
@@ -26,6 +28,9 @@ class ZoomCrop:
             "required": {
                 "image": (files, {"image_upload": True}),
             },
+            "optional": {
+                "input_image": ("IMAGE",),
+            },
             "hidden": {
                 "crop_data": ("STRING", {"default": "{}"}),
             }
@@ -36,16 +41,21 @@ class ZoomCrop:
     FUNCTION = "execute"
     CATEGORY = "image/crop"
 
-    def execute(self, image, crop_data="{}"):
+    def execute(self, image, input_image=None, crop_data="{}"):
         # Load original image
-        image_path = folder_paths.get_annotated_filepath(image)
-        img = Image.open(image_path)
-        img = ImageOps.exif_transpose(img)
+        if input_image is not None:
+            img_np = (input_image[0].cpu().numpy() * 255).astype(np.uint8)
+            img = Image.fromarray(img_np).convert("RGB")
+        else:
+            image_path = folder_paths.get_annotated_filepath(image)
+            img = Image.open(image_path)
+            img = ImageOps.exif_transpose(img)
 
-        if img.mode == "I":
-            img = img.point(lambda i: i * (1 / 255))
+            if img.mode == "I":
+                img = img.point(lambda i: i * (1 / 255))
 
-        img = img.convert("RGB")
+            img = img.convert("RGB")
+
         orig_w, orig_h = img.size
 
         # Parse crop coordinates from the JS widget
@@ -75,17 +85,20 @@ class ZoomCrop:
         return (cropped_tensor,)
 
     @classmethod
-    def IS_CHANGED(s, image, crop_data="{}"):
+    def IS_CHANGED(s, image, input_image=None, crop_data="{}"):
         m = hashlib.sha256()
-        image_path = folder_paths.get_annotated_filepath(image)
-        with open(image_path, "rb") as f:
-            m.update(f.read())
+        if input_image is not None:
+            m.update(b"input_image_connected")
+        else:
+            image_path = folder_paths.get_annotated_filepath(image)
+            with open(image_path, "rb") as f:
+                m.update(f.read())
         m.update((crop_data or "").encode("utf-8"))
         return m.digest().hex()
 
     @classmethod
-    def VALIDATE_INPUTS(s, image, crop_data="{}"):
-        if not folder_paths.exists_annotated_filepath(image):
+    def VALIDATE_INPUTS(s, image, input_image=None, crop_data="{}"):
+        if input_image is None and not folder_paths.exists_annotated_filepath(image):
             return "Invalid image file: {}".format(image)
         return True
 

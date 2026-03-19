@@ -80,6 +80,51 @@ function createToolbar(state, redrawFn, node, canvas) {
     updateRatioBtn();
     toolbar.appendChild(ratioBtn);
 
+    // Lock crop position toggle
+    const lockBtn = btn("\uD83D\uDD12", "Lock crop position (prevent accidental moves/resizes)", () => {
+        state.lockCrop = !state.lockCrop;
+        updateLockBtn();
+        if (redrawFn) redrawFn();
+    });
+    function updateLockBtn() {
+        if (state.lockCrop) {
+            lockBtn.style.background = "#5a2a2a";
+            lockBtn.style.color = "#f88";
+            lockBtn.style.borderColor = "#f88";
+            lockBtn.title = "Crop locked \u2014 click to unlock";
+        } else {
+            lockBtn.style.background = "#333";
+            lockBtn.style.color = "#ccc";
+            lockBtn.style.borderColor = "#555";
+            lockBtn.title = "Lock crop position";
+        }
+    }
+    lockBtn.addEventListener("mouseenter", () => { lockBtn.style.background = state.lockCrop ? "#7a3a3a" : "#555"; });
+    lockBtn.addEventListener("mouseleave", () => { lockBtn.style.background = state.lockCrop ? "#5a2a2a" : "#333"; });
+    state._lockBtn = lockBtn;
+    state._updateLockBtn = updateLockBtn;
+    toolbar.appendChild(lockBtn);
+
+    // Max — expand crop to full image
+    const maxBtn = btn("Max", "Set crop to full image", () => {
+        state.crop = { x: 0, y: 0, width: state.imageWidth, height: state.imageHeight };
+        if (redrawFn) redrawFn();
+    });
+    toolbar.appendChild(maxBtn);
+
+    // Reset — crop to centered 50%
+    const resetBtn = btn("50%", "Reset crop to centered 50%", () => {
+        const w = Math.round(state.imageWidth * 0.5);
+        const h = Math.round(state.imageHeight * 0.5);
+        state.crop = {
+            x: Math.round((state.imageWidth - w) / 2),
+            y: Math.round((state.imageHeight - h) / 2),
+            width: w, height: h,
+        };
+        if (redrawFn) redrawFn();
+    });
+    toolbar.appendChild(resetBtn);
+
     toolbar.appendChild(sep());
 
     // Push button — upload current image (cropped or not) and send to connected/adjacent nodes
@@ -231,8 +276,31 @@ function createToolbar(state, redrawFn, node, canvas) {
     state._pushBtn = pushBtn;
     state._enableBtn = enableBtn;
 
+    // Paste button — before Push
+    const pasteBtn = btn("Paste", "Paste image from clipboard (Ctrl+V)", async () => {
+        try {
+            const items = await navigator.clipboard.read();
+            for (const item of items) {
+                const imageType = item.types.find((t) => t.startsWith("image/"));
+                if (!imageType) continue;
+                const blob = await item.getType(imageType);
+                await state._uploadAndSetImage(blob, node);
+                return;
+            }
+        } catch (err) {
+            console.error("ZoomCrop paste failed:", err);
+        }
+    });
+    pasteBtn.style.background = "#2a3a5a";
+    pasteBtn.style.color = "#8cf";
+    pasteBtn.addEventListener("mouseenter", () => { pasteBtn.style.background = "#3a5a7a"; });
+    pasteBtn.addEventListener("mouseleave", () => { pasteBtn.style.background = "#2a3a5a"; });
+    toolbar.appendChild(pasteBtn);
+
+    toolbar.appendChild(sep());
+
     // All buttons that should be disabled when node is muted
-    const actionBtns = [fitBtn, ratioBtn, pushBtn];
+    const actionBtns = [fitBtn, ratioBtn, lockBtn, maxBtn, resetBtn, pasteBtn, pushBtn];
 
     // Helper: disable all action buttons (called by Push)
     state._disableToolbar = () => {
@@ -270,7 +338,8 @@ function createToolbar(state, redrawFn, node, canvas) {
 }
 
 // ── Hit-test helpers ────────────────────────────────────────────────────
-const HANDLE_SIZE = 8;
+const HANDLE_SIZE = 12;       // visual size of anchor squares (50% larger)
+const HANDLE_HIT  = 28;       // hit-detection radius in screen px (generous hover area)
 
 function getHandles(crop) {
     const { x, y, width, height } = crop;
@@ -290,9 +359,11 @@ function getHandles(crop) {
     };
 }
 
-function hitTestHandles(mx, my, crop, zoom) {
+function hitTestHandles(mx, my, crop, zoom, canvas) {
     const handles = getHandles(crop);
-    const threshold = HANDLE_SIZE / zoom + 2;
+    const rect = canvas.getBoundingClientRect();
+    const displayScale = canvas.width / (rect.width || canvas.offsetWidth || canvas.width);
+    const threshold = HANDLE_HIT * displayScale / zoom;
     for (const [key, pos] of Object.entries(handles)) {
         if (Math.abs(mx - pos.x) < threshold && Math.abs(my - pos.y) < threshold) {
             return key;
@@ -324,6 +395,10 @@ function drawCropOverlay(ctx, canvas, state) {
 
     if (!state._bgImage) return;
 
+    // displayScale converts screen px sizes to image px sizes
+    const rect = canvas.getBoundingClientRect();
+    const displayScale = canvas.width / (rect.width || canvas.offsetWidth || canvas.width);
+
     ctx.save();
     ctx.translate(panX, panY);
     ctx.scale(zoom, zoom);
@@ -331,23 +406,18 @@ function drawCropOverlay(ctx, canvas, state) {
     // Draw image
     ctx.drawImage(state._bgImage, 0, 0, imageWidth, imageHeight);
 
-    // Dark overlay outside crop
-    ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
-    ctx.fillRect(0, 0, imageWidth, crop.y);
-    ctx.fillRect(0, crop.y + crop.height, imageWidth, imageHeight - crop.y - crop.height);
-    ctx.fillRect(0, crop.y, crop.x, crop.height);
-    ctx.fillRect(crop.x + crop.width, crop.y, imageWidth - crop.x - crop.width, crop.height);
-
-    // Crop border (dashed)
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 1.5 / zoom;
-    ctx.setLineDash([6 / zoom, 4 / zoom]);
+    // Crop border (green dashed) — 1.875 screen px
+    ctx.strokeStyle = "#00e676";
+    ctx.lineWidth = 1.875 * displayScale / zoom;
+    const dashLen = 6 * displayScale / zoom;
+    const gapLen  = 4 * displayScale / zoom;
+    ctx.setLineDash([dashLen, gapLen]);
     ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
     ctx.setLineDash([]);
 
-    // Rule of thirds grid (subtle)
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
-    ctx.lineWidth = 0.5 / zoom;
+    // Rule of thirds grid (subtle green) — 0.5 screen px
+    ctx.strokeStyle = "rgba(0, 230, 118, 0.25)";
+    ctx.lineWidth = 0.5 * displayScale / zoom;
     for (let i = 1; i <= 2; i++) {
         const gx = crop.x + (crop.width * i) / 3;
         const gy = crop.y + (crop.height * i) / 3;
@@ -361,12 +431,12 @@ function drawCropOverlay(ctx, canvas, state) {
         ctx.stroke();
     }
 
-    // Resize handles
+    // Resize handles — HANDLE_SIZE screen px
     const handles = getHandles(crop);
-    const hs = HANDLE_SIZE / zoom;
+    const hs = HANDLE_SIZE * displayScale / zoom;
     ctx.fillStyle = "#fff";
     ctx.strokeStyle = "#333";
-    ctx.lineWidth = 1 / zoom;
+    ctx.lineWidth = 1 * displayScale / zoom;
     for (const pos of Object.values(handles)) {
         ctx.fillRect(pos.x - hs / 2, pos.y - hs / 2, hs, hs);
         ctx.strokeRect(pos.x - hs / 2, pos.y - hs / 2, hs, hs);
@@ -425,7 +495,10 @@ function initInteraction(canvas, state, redrawFn) {
             return;
         }
 
-        const handle = hitTestHandles(imgX, imgY, state.crop, state.zoom);
+        // When crop is locked, no crop interaction (only pan allowed)
+        if (state.lockCrop) return;
+
+        const handle = hitTestHandles(imgX, imgY, state.crop, state.zoom, canvas);
         if (handle) {
             mode = "resize";
             activeHandle = handle;
@@ -477,20 +550,19 @@ function initInteraction(canvas, state, redrawFn) {
             let y2 = Math.max(startY, clampedY);
 
             if (state.lockRatio) {
-                let size = Math.max(x2 - x1, y2 - y1);
-                // Grow from the start anchor point in the drag direction
-                if (clampedX >= startX) { x1 = startX; x2 = startX + size; }
-                else { x2 = startX; x1 = startX - size; }
-                if (clampedY >= startY) { y1 = startY; y2 = startY + size; }
-                else { y2 = startY; y1 = startY - size; }
-                // Clamp to image bounds and re-square
-                if (x1 < 0) { x1 = 0; size = Math.min(size, x2 - x1); }
-                if (y1 < 0) { y1 = 0; size = Math.min(size, y2 - y1); }
-                if (x2 > state.imageWidth) { x2 = state.imageWidth; size = Math.min(size, x2 - x1); }
-                if (y2 > state.imageHeight) { y2 = state.imageHeight; size = Math.min(size, y2 - y1); }
-                // Re-apply square size from anchor
-                if (clampedX >= startX) x2 = x1 + size; else x1 = x2 - size;
-                if (clampedY >= startY) y2 = y1 + size; else y1 = y2 - size;
+                const ratio = (state.aspectW || 1) / (state.aspectH || 1);
+                let w = x2 - x1;
+                let h = y2 - y1;
+                // Pick dominant dimension based on drag direction
+                if (w / ratio >= h) { h = w / ratio; }
+                else { w = h * ratio; }
+                if (clampedX >= startX) { x1 = startX; x2 = startX + w; }
+                else { x2 = startX; x1 = startX - w; }
+                if (clampedY >= startY) { y1 = startY; y2 = startY + h; }
+                else { y2 = startY; y1 = startY - h; }
+                // Clamp to image bounds
+                x1 = Math.max(0, x1); y1 = Math.max(0, y1);
+                x2 = Math.min(state.imageWidth, x2); y2 = Math.min(state.imageHeight, y2);
             }
 
             state.crop = { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
@@ -525,13 +597,12 @@ function initInteraction(canvas, state, redrawFn) {
             if (newH < 1) { newH = 1; if (activeHandle.includes("t")) newY = sc.y + sc.height - 1; }
 
             if (state.lockRatio) {
-                // Use the larger dimension to enforce square
-                const size = Math.max(newW, newH);
-                // Anchor the opposite edge depending on which handle is dragged
-                if (activeHandle.includes("l")) { newX = sc.x + sc.width - size; newW = size; }
-                else { newW = size; }
-                if (activeHandle.includes("t")) { newY = sc.y + sc.height - size; newH = size; }
-                else { newH = size; }
+                const ratio = (state.aspectW || 1) / (state.aspectH || 1);
+                // Use the larger dimension to enforce the aspect ratio
+                if (newW / ratio >= newH) { newH = newW / ratio; }
+                else { newW = newH * ratio; }
+                if (activeHandle.includes("l")) newX = sc.x + sc.width - newW;
+                if (activeHandle.includes("t")) newY = sc.y + sc.height - newH;
             }
 
             state.crop = { x: newX, y: newY, width: newW, height: newH };
@@ -541,13 +612,17 @@ function initInteraction(canvas, state, redrawFn) {
         }
 
         if (!mode) {
-            const handle = hitTestHandles(imgX, imgY, state.crop, state.zoom);
-            if (handle) {
-                canvas.style.cursor = getCursorForHandle(handle);
-            } else if (hitTestCropBox(imgX, imgY, state.crop)) {
-                canvas.style.cursor = "move";
+            if (state.lockCrop) {
+                canvas.style.cursor = spaceDown ? "grab" : "default";
             } else {
-                canvas.style.cursor = spaceDown ? "grab" : "crosshair";
+                const handle = hitTestHandles(imgX, imgY, state.crop, state.zoom, canvas);
+                if (handle) {
+                    canvas.style.cursor = getCursorForHandle(handle);
+                } else if (hitTestCropBox(imgX, imgY, state.crop)) {
+                    canvas.style.cursor = "move";
+                } else {
+                    canvas.style.cursor = spaceDown ? "grab" : "crosshair";
+                }
             }
         }
     }
@@ -625,8 +700,12 @@ function initInteraction(canvas, state, redrawFn) {
 
     canvas.addEventListener("pointermove", (e) => {
         if (mode) return;
+        if (state.lockCrop) {
+            canvas.style.cursor = spaceDown ? "grab" : "default";
+            return;
+        }
         const { imgX, imgY } = toImageCoords(e);
-        const handle = hitTestHandles(imgX, imgY, state.crop, state.zoom);
+        const handle = hitTestHandles(imgX, imgY, state.crop, state.zoom, canvas);
         if (handle) {
             canvas.style.cursor = getCursorForHandle(handle);
         } else if (hitTestCropBox(imgX, imgY, state.crop)) {
@@ -777,7 +856,12 @@ app.registerExtension({
                 _infoLabel: null,
                 _forceReload: null,
                 _pushToggle: false,
+                _pasteToggle: false,
                 lockRatio: false,
+                lockCrop: false,
+                aspectW: 1,
+                aspectH: 1,
+                _uploadAndSetImage: null,
             };
 
             // ── Container ──
@@ -806,6 +890,161 @@ app.registerExtension({
             // ── Toolbar ──
             const toolbar = createToolbar(state, redraw, node, canvas);
             container.appendChild(toolbar);
+
+            // ── Advanced panel (hidden until toggled) ──
+            const advPanel = document.createElement("div");
+            advPanel.style.cssText = `
+                display: none; flex-direction: column; gap: 5px;
+                padding: 6px 8px; background: #1a1a30;
+                border-bottom: 1px solid #333;
+            `;
+
+            // Preset aspect ratios row
+            const ratioRow = document.createElement("div");
+            ratioRow.style.cssText = "display: flex; align-items: center; gap: 4px; flex-wrap: wrap;";
+            const ratioRowLabel = document.createElement("span");
+            ratioRowLabel.textContent = "Ratio:";
+            ratioRowLabel.style.cssText = "color: #aaa; font-size: 10px; min-width: 30px;";
+            ratioRow.appendChild(ratioRowLabel);
+
+            const ratioPresets = [
+                { label: "Free", w: 0, h: 0 },
+                { label: "1:1", w: 1, h: 1 },
+                { label: "4:3", w: 4, h: 3 },
+                { label: "3:4", w: 3, h: 4 },
+                { label: "16:9", w: 16, h: 9 },
+                { label: "9:16", w: 9, h: 16 },
+                { label: "SDXL 1:1", w: 1, h: 1 },
+                { label: "SDXL 3:2", w: 3, h: 2 },
+                { label: "SDXL 2:3", w: 2, h: 3 },
+            ];
+            let activeRatioBtn = null;
+            ratioPresets.forEach(({ label, w, h }) => {
+                const rb = document.createElement("button");
+                rb.textContent = label;
+                rb.style.cssText = `
+                    height: 20px; border: 1px solid #555; color: #ccc;
+                    border-radius: 3px; cursor: pointer; font-size: 10px; padding: 0 5px;
+                    background: #333;
+                `;
+                rb.addEventListener("mousedown", (e) => e.stopPropagation());
+                rb.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    if (activeRatioBtn) {
+                        activeRatioBtn.style.background = "#333";
+                        activeRatioBtn.style.color = "#ccc";
+                        activeRatioBtn.style.borderColor = "#555";
+                    }
+                    activeRatioBtn = rb;
+                    rb.style.background = "#2a5a2a";
+                    rb.style.color = "#8f8";
+                    rb.style.borderColor = "#8f8";
+
+                    if (w === 0) {
+                        // Free — unlock ratio
+                        state.lockRatio = false;
+                        state.aspectW = 1;
+                        state.aspectH = 1;
+                    } else {
+                        state.lockRatio = true;
+                        state.aspectW = w;
+                        state.aspectH = h;
+                        // Snap existing crop to new ratio immediately
+                        const newW = state.crop.width;
+                        const newH = Math.round(newW / (w / h));
+                        state.crop.height = Math.min(newH, state.imageHeight - state.crop.y);
+                        if (state.crop.y + state.crop.height > state.imageHeight)
+                            state.crop.y = state.imageHeight - state.crop.height;
+                    }
+                    redraw();
+                });
+                ratioRow.appendChild(rb);
+            });
+            advPanel.appendChild(ratioRow);
+
+            // Numeric X / Y / W / H fields
+            const numRow = document.createElement("div");
+            numRow.style.cssText = "display: flex; align-items: center; gap: 8px; flex-wrap: wrap;";
+
+            function makeNumField(labelText, getter, setter) {
+                const wrap = document.createElement("div");
+                wrap.style.cssText = "display: flex; align-items: center; gap: 3px;";
+                const lbl = document.createElement("span");
+                lbl.textContent = labelText + ":";
+                lbl.style.cssText = "color: #aaa; font-size: 10px;";
+                const inp = document.createElement("input");
+                inp.type = "number";
+                inp.min = "0";
+                inp.style.cssText = `
+                    width: 56px; height: 20px; background: #2a2a3e;
+                    border: 1px solid #555; color: #eee; font-size: 10px;
+                    border-radius: 3px; padding: 0 4px; text-align: right;
+                `;
+                inp.addEventListener("mousedown", (e) => e.stopPropagation());
+                inp.addEventListener("change", (e) => {
+                    e.stopPropagation();
+                    const v = parseInt(e.target.value);
+                    if (!isNaN(v)) setter(v);
+                    redraw();
+                });
+                wrap.appendChild(lbl);
+                wrap.appendChild(inp);
+                numRow.appendChild(wrap);
+                return inp;
+            }
+
+            const xInp = makeNumField("X", () => state.crop.x, (v) => {
+                state.crop.x = Math.max(0, Math.min(v, state.imageWidth - state.crop.width));
+            });
+            const yInp = makeNumField("Y", () => state.crop.y, (v) => {
+                state.crop.y = Math.max(0, Math.min(v, state.imageHeight - state.crop.height));
+            });
+            const wInp = makeNumField("W", () => state.crop.width, (v) => {
+                state.crop.width = Math.max(1, Math.min(v, state.imageWidth - state.crop.x));
+            });
+            const hInp = makeNumField("H", () => state.crop.height, (v) => {
+                state.crop.height = Math.max(1, Math.min(v, state.imageHeight - state.crop.y));
+            });
+            advPanel.appendChild(numRow);
+
+            // Sync numeric fields with current crop (on interval)
+            const syncInterval = setInterval(() => {
+                if (advPanel.style.display === "none") return;
+                xInp.value = Math.round(state.crop.x);
+                yInp.value = Math.round(state.crop.y);
+                wInp.value = Math.round(state.crop.width);
+                hInp.value = Math.round(state.crop.height);
+            }, 100);
+
+            // Add "Adv" toggle button to toolbar
+            const advBtn = document.createElement("button");
+            advBtn.textContent = "Adv";
+            advBtn.title = "Toggle advanced options (ratios, numeric fields)";
+            advBtn.style.cssText = `
+                min-width: 26px; height: 24px; border: 1px solid #555;
+                color: #ccc; font-weight: bold; border-radius: 4px;
+                cursor: pointer; font-size: 11px; padding: 0 6px;
+                background: #333;
+            `;
+            advBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+            advBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const visible = advPanel.style.display !== "none";
+                advPanel.style.display = visible ? "none" : "flex";
+                advBtn.style.background = visible ? "#333" : "#2a3a5a";
+                advBtn.style.color = visible ? "#ccc" : "#8cf";
+                advBtn.style.borderColor = visible ? "#555" : "#8cf";
+            });
+            toolbar.appendChild(advBtn);
+
+            // Add advPanel cleanup to node removal
+            const _origOnRemovedAdv = node.onRemoved;
+            node.onRemoved = function () {
+                clearInterval(syncInterval);
+                _origOnRemovedAdv?.apply(this, arguments);
+            };
+
+            container.appendChild(advPanel);
             container.appendChild(canvas);
 
             // ── Init interaction ──
@@ -853,6 +1092,60 @@ app.registerExtension({
             // ── Watch image widget (sets state._forceReload) ──
             watchImageWidget(node, canvas, state, redraw);
 
+            // ── Load image from connected input_image when upstream executes ──
+            const onExecuted = (event) => {
+                const detail = event.detail;
+                if (!detail?.output?.images?.length) return;
+
+                // Check if input_image slot exists and is connected
+                const inputSlot = node.inputs?.find((i) => i.name === "input_image");
+                if (!inputSlot?.link) return;
+
+                // Verify the executed node is the upstream source
+                const link = app.graph.links[inputSlot.link];
+                if (!link || String(link.origin_id) !== String(detail.node)) return;
+
+                const imgInfo = detail.output.images[0];
+                const url = api.apiURL(
+                    `/view?filename=${encodeURIComponent(imgInfo.filename)}&type=${encodeURIComponent(imgInfo.type)}&subfolder=${encodeURIComponent(imgInfo.subfolder || "")}&t=${Date.now()}`
+                );
+
+                const img = new window.Image();
+                img.crossOrigin = "anonymous";
+                img.onload = () => {
+                    state.imageWidth = img.naturalWidth;
+                    state.imageHeight = img.naturalHeight;
+                    state._bgImage = img;
+                    canvas.width = img.naturalWidth;
+                    canvas.height = img.naturalHeight;
+
+                    // Keep existing crop if same dimensions, else reset to 50%
+                    const sameSize =
+                        state.crop.width > 0 &&
+                        state.crop.x + state.crop.width <= img.naturalWidth &&
+                        state.crop.y + state.crop.height <= img.naturalHeight;
+                    if (!sameSize) {
+                        const cw = Math.round(img.naturalWidth * 0.5);
+                        const ch = Math.round(img.naturalHeight * 0.5);
+                        state.crop = {
+                            x: Math.round((img.naturalWidth - cw) / 2),
+                            y: Math.round((img.naturalHeight - ch) / 2),
+                            width: cw,
+                            height: ch,
+                        };
+                    }
+
+                    // Resize node to fit aspect ratio
+                    const aspect = img.naturalWidth / img.naturalHeight;
+                    const nodeWidth = Math.max(380, node.size[0]);
+                    node.setSize([nodeWidth, nodeWidth / aspect + 120]);
+
+                    redraw();
+                };
+                img.src = url;
+            };
+            api.addEventListener("executed", onExecuted);
+
             // ── Hide the auto-generated image preview ──
             node.onDrawBackground = function() {};
             node.setSizeForImage = function() {};
@@ -875,11 +1168,74 @@ app.registerExtension({
             setTimeout(hidePreview, 500);
             setTimeout(hidePreview, 1500);
 
+            // ── Clipboard paste ──
+            state._uploadAndSetImage = async (blob, targetNode) => {
+                state._pasteToggle = !state._pasteToggle;
+                const name = state._pasteToggle
+                    ? "zoom_crop_paste_a.png"
+                    : "zoom_crop_paste_b.png";
+                const formData = new FormData();
+                formData.append("image", blob, name);
+                formData.append("overwrite", "true");
+                try {
+                    const resp = await api.fetchApi("/upload/image", {
+                        method: "POST",
+                        body: formData,
+                    });
+                    if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
+                    const result = await resp.json();
+                    const imageWidget = targetNode.widgets?.find(
+                        (w) => w.name === "image"
+                    );
+                    if (imageWidget) {
+                        imageWidget.value = result.name;
+                        if (imageWidget.callback)
+                            imageWidget.callback(result.name);
+                    }
+                } catch (err) {
+                    console.error("ZoomCrop upload failed:", err);
+                }
+            };
+
+            const onPaste = (e) => {
+                if (!canvas.offsetParent) return;
+                const items = e.clipboardData?.items;
+                if (!items) return;
+                for (const item of items) {
+                    if (item.type.startsWith("image/")) {
+                        e.preventDefault();
+                        const blob = item.getAsFile();
+                        state._uploadAndSetImage(blob, node);
+                        return;
+                    }
+                }
+            };
+            document.addEventListener("paste", onPaste);
+
             // Cleanup on removal
             const origOnRemoved = node.onRemoved;
             node.onRemoved = function () {
                 interaction.cleanup();
+                document.removeEventListener("paste", onPaste);
+                api.removeEventListener("executed", onExecuted);
                 origOnRemoved?.apply(this, arguments);
+            };
+
+            // ── Node resize handler — maintain image aspect ratio ──
+            let _resizing = false;
+            const origOnResize = node.onResize;
+            node.onResize = function (size) {
+                origOnResize?.apply(this, arguments);
+                if (state._bgImage && !_resizing) {
+                    const aspect = state.imageWidth / state.imageHeight;
+                    const targetH = Math.round(size[0] / aspect) + 120;
+                    if (Math.abs(size[1] - targetH) > 2) {
+                        _resizing = true;
+                        node.setSize([size[0], targetH]);
+                        _resizing = false;
+                    }
+                }
+                requestAnimationFrame(() => redraw());
             };
 
             node.setSize([400, 480]);
@@ -889,6 +1245,9 @@ app.registerExtension({
         const origOnConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function (info) {
             origOnConfigure?.apply(this, arguments);
+
+            // Always start enabled — don't stay muted from a previous Push
+            this.mode = 0;
 
             if (!info?.widgets_values) return;
 
