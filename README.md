@@ -2,8 +2,6 @@
 
 An interactive, Photoshop-style zoom & crop tool for ComfyUI. Load an image, visually position and resize a crop box with handles, then execute to output the cropped region as an IMAGE tensor.
 
-![Zoom Crop node](https://raw.githubusercontent.com/MancDanny/Zoom_Crop/main/docs/preview.png)
-
 ---
 
 ## Features
@@ -57,17 +55,14 @@ An interactive, Photoshop-style zoom & crop tool for ComfyUI. Load an image, vis
 
 ## Installation
 
-### Option A — ComfyUI Manager (recommended)
-Search for **"Zoom Crop"** in ComfyUI Manager and click Install.
-
-### Option B — Manual
+### Option A — Manual
 ```bash
 cd ComfyUI/custom_nodes
 git clone https://github.com/MancDanny/Zoom_Crop.git
 ```
 Then restart ComfyUI.
 
-### Option C — Direct download
+### Option B — Direct download
 Download the ZIP from the [Releases](https://github.com/MancDanny/Zoom_Crop/releases) page, extract to `ComfyUI/custom_nodes/Zoom_Crop/`, restart ComfyUI.
 
 **No extra Python dependencies** — uses only `torch`, `numpy`, `Pillow`, and `folder_paths` (all included in ComfyUI).
@@ -106,7 +101,7 @@ All handle sizes, border widths, and hover detection areas scale automatically w
 - `input_image` optional slot — connect upstream IMAGE nodes
 - Auto-enables on workflow reload (no longer stays muted)
 - Aspect ratio maintained on node resize
-- Toolbar reorganised: Fit | 1:1 | 🔒 | Max | 50% | Paste | Push > | Adv
+- Toolbar reorganised: Fit | 1:1 | 🔒 | Max | 50% | Paste | Push > | Enable | info | Adv
 
 ### v1.0.0
 - Initial release

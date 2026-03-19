@@ -257,26 +257,8 @@ function createToolbar(state, redrawFn, node, canvas) {
     pushBtn.addEventListener("mouseleave", () => {
         pushBtn.style.background = "#2a3a5a";
     });
-    toolbar.appendChild(pushBtn);
 
-    // Enable button — re-activates this node after it was bypassed by Push
-    const enableBtn = btn("Enable", "Re-enable this node for execution", () => {
-        node.mode = 0; // LiteGraph mode 0 = ALWAYS (active)
-        app.graph.setDirtyCanvas(true, true);
-        if (state._enableToolbar) state._enableToolbar();
-    });
-    enableBtn.style.background = "#4a3a1a";
-    enableBtn.style.color = "#fd8";
-    enableBtn.style.display = "none"; // hidden until Push disables the node
-    enableBtn.addEventListener("mouseenter", () => { enableBtn.style.background = "#6a5a2a"; });
-    enableBtn.addEventListener("mouseleave", () => { enableBtn.style.background = "#4a3a1a"; });
-    toolbar.appendChild(enableBtn);
-
-    // Store refs so Push can swap button visibility
-    state._pushBtn = pushBtn;
-    state._enableBtn = enableBtn;
-
-    // Paste button — before Push
+    // Paste button — before Push in toolbar order
     const pasteBtn = btn("Paste", "Paste image from clipboard (Ctrl+V)", async () => {
         try {
             const items = await navigator.clipboard.read();
@@ -296,6 +278,27 @@ function createToolbar(state, redrawFn, node, canvas) {
     pasteBtn.addEventListener("mouseenter", () => { pasteBtn.style.background = "#3a5a7a"; });
     pasteBtn.addEventListener("mouseleave", () => { pasteBtn.style.background = "#2a3a5a"; });
     toolbar.appendChild(pasteBtn);
+
+    toolbar.appendChild(sep());
+
+    toolbar.appendChild(pushBtn);
+
+    // Enable button — re-activates this node after it was bypassed by Push
+    const enableBtn = btn("Enable", "Re-enable this node for execution", () => {
+        node.mode = 0; // LiteGraph mode 0 = ALWAYS (active)
+        app.graph.setDirtyCanvas(true, true);
+        if (state._enableToolbar) state._enableToolbar();
+    });
+    enableBtn.style.background = "#4a3a1a";
+    enableBtn.style.color = "#fd8";
+    enableBtn.style.display = "none"; // hidden until Push disables the node
+    enableBtn.addEventListener("mouseenter", () => { enableBtn.style.background = "#6a5a2a"; });
+    enableBtn.addEventListener("mouseleave", () => { enableBtn.style.background = "#4a3a1a"; });
+    toolbar.appendChild(enableBtn);
+
+    // Store refs so Push can swap button visibility
+    state._pushBtn = pushBtn;
+    state._enableBtn = enableBtn;
 
     toolbar.appendChild(sep());
 

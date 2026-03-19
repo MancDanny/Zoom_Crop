@@ -3,8 +3,6 @@ import numpy as np
 import os
 import json
 import hashlib
-import io
-import base64
 from PIL import Image, ImageOps
 import folder_paths
 
